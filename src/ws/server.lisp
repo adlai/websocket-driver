@@ -19,10 +19,8 @@
                 #:with-fast-output
                 #:fast-write-sequence
                 #:fast-write-byte)
-  (:import-from :ironclad
-                #:ascii-string-to-byte-array)
-  (:import-from :trivial-utf-8
-                #:string-to-utf-8-bytes)
+  (:import-from :babel
+                #:string-to-octets)
   (:export #:server))
 (in-package :websocket-driver.ws.server)
 
@@ -62,7 +60,7 @@
 
 (defmethod start-connection ((server server) &key)
   (unless (eq (ready-state server) :connecting)
-      (return-from start-connection))
+    (return-from start-connection))
 
   (let ((socket (socket server)))
     (setf (read-callback socket)
@@ -83,7 +81,8 @@
                  while frame
                  do (funcall (read-callback socket) frame))
         (close-connection server)
-        (setf (ready-state server) :closed)))))
+        (setf (ready-state server) :closed)
+        (wsd:emit :close server :code 1006 :reason "websocket connection closed")))))
 
 (defmethod close-connection ((server server) &optional (reason "") (code (error-code :normal-closure)))
   (setf (ready-state server) :closing)
@@ -103,11 +102,11 @@
                               :code code
                               :masking nil)))
     (handler-case
-	(write-sequence-to-socket (socket server) frame
-				  :callback callback)
+        (write-sequence-to-socket (socket server) frame
+                                  :callback callback)
       (error ()
         (setf (ready-state server) :closed)
-	(wsd:emit :close server :code 1006 :reason "websocket connection closed")))))
+        (wsd:emit :close server :code 1006 :reason "websocket connection closed")))))
 
 (defmethod send-handshake-response ((server server) &key callback)
   (let ((socket (socket server))
@@ -119,16 +118,18 @@
     (labels ((octets (data)
                (write-sequence-to-socket-buffer socket data))
              (ascii-string (data)
-               (octets (ascii-string-to-byte-array data)))
+               (octets (string-to-octets data :encoding :ascii)))
              (crlf ()
-               (octets #.(ascii-string-to-byte-array (format nil "~C~C" #\Return #\Newline)))))
+               (octets #.(string-to-octets (format nil "~C~C" #\Return #\Newline)
+                                           :encoding :ascii))))
       (octets
-       #.(ascii-string-to-byte-array
+       #.(string-to-octets
           (with-output-to-string (s)
             (format s "HTTP/1.1 101 Switching Protocols~C~C" #\Return #\Newline)
             (format s "Upgrade: websocket~C~C" #\Return #\Newline)
             (format s "Connection: Upgrade~C~C" #\Return #\Newline)
-            (format s "Sec-WebSocket-Accept: "))))
+            (format s "Sec-WebSocket-Accept: "))
+          :encoding :ascii))
       (ascii-string
        (generate-accept sec-key))
       (crlf)
@@ -136,7 +137,8 @@
       (let ((protocol (protocol server)))
         (when protocol
           (octets
-           #.(ascii-string-to-byte-array "Sec-WebSocket-Protocol: "))
+           #.(string-to-octets "Sec-WebSocket-Protocol: "
+                               :encoding :ascii))
           (ascii-string protocol)
           (crlf)))
 
@@ -144,7 +146,7 @@
             do (ascii-string
                 (string-capitalize name))
                (octets
-                #.(ascii-string-to-byte-array ": "))
+                #.(string-to-octets ": " :encoding :ascii))
                (ascii-string value)
                (crlf))
 

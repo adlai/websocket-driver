@@ -17,10 +17,8 @@
                 #:http-status)
   (:import-from :cl-base64
                 #:usb8-array-to-base64-string)
-  (:import-from :trivial-utf-8
-                #:string-to-utf-8-bytes)
-  (:import-from :ironclad
-                #:ascii-string-to-byte-array)
+  (:import-from :babel
+                #:string-to-octets)
   (:import-from :quri
                 #:uri
                 #:uri-scheme
@@ -41,7 +39,8 @@
    (require-masking :initarg :require-masking
                     :initform nil
                     :accessor require-masking)
-   (read-thread :initform nil)))
+   (read-thread :initform nil
+		:accessor read-thread)))
 
 (defun generate-key ()
   (let ((key (make-array 16 :element-type '(unsigned-byte 8))))
@@ -182,11 +181,11 @@
       (send-handshake-request client)
       (funcall http-parser (read-until-crlf*2 stream))
       (open-connection client)
-      (setf (slot-value client 'read-thread)
-            (bt:make-thread
+      (setf (read-thread client)
+            (bt2:make-thread
              (lambda ()
                (unwind-protect
-                    (loop for frame = (read-websocket-frame stream)
+		    (loop for frame = (read-websocket-frame stream)
                           while frame
                           do (parse client frame))
                  (close-connection client)))
@@ -218,9 +217,10 @@
        (labels ((octets (data)
                   (fast-write-sequence data buffer))
                 (ascii-string (data)
-                  (octets (ascii-string-to-byte-array data)))
+                  (octets (string-to-octets data :encoding :ascii)))
                 (crlf ()
-                  (octets #.(ascii-string-to-byte-array (format nil "~C~C" #\Return #\Newline)))))
+                  (octets #.(string-to-octets (format nil "~C~C" #\Return #\Newline)
+                                              :encoding :ascii))))
          (ascii-string
           (format nil "GET ~:[/~;~:*~A~]~:[~;~:*?~A~] HTTP/1.1~C~C"
                   (quri:uri-path uri)
@@ -231,17 +231,19 @@
                   (quri:uri-authority uri)
                   #\Return #\Newline))
          (octets
-          #.(ascii-string-to-byte-array
+          #.(string-to-octets
              (with-output-to-string (s)
                (format s "Upgrade: websocket~C~C" #\Return #\Newline)
-               (format s "Connection: Upgrade~C~C" #\Return #\Newline))))
+               (format s "Connection: Upgrade~C~C" #\Return #\Newline))
+             :encoding :ascii))
          (ascii-string
           (format nil "Sec-WebSocket-Key: ~A~C~C"
                   (key client)
                   #\Return #\Newline))
          (octets
-          #.(ascii-string-to-byte-array
-             (format nil "Sec-WebSocket-Version: 13~C~C" #\Return #\Newline)))
+          #.(string-to-octets
+             (format nil "Sec-WebSocket-Version: 13~C~C" #\Return #\Newline)
+             :encoding :ascii))
          (when (accept-protocols client)
            (ascii-string
             (format nil "Sec-WebSocket-Protocol: ~{~A~^, ~}~C~C"
@@ -252,7 +254,7 @@
                do (ascii-string
                    (string-capitalize name))
                   (octets
-                   #.(ascii-string-to-byte-array ": "))
+                   #.(string-to-octets ": " :encoding :ascii))
                   (ascii-string value)
                   (crlf))
 
@@ -265,10 +267,12 @@
 (defmethod close-connection ((client client) &optional reason code)
   (ignore-errors (close (socket client)))
   (setf (ready-state client) :closed)
-  (let ((thread (slot-value client 'read-thread)))
+  (let ((thread (read-thread client)))
     (when thread
-      (unless (eq (bt:current-thread) thread)
-        (bt:destroy-thread thread))
-      (setf (slot-value client 'read-thread) nil)))
+      (if (and (bt2::threadp thread)
+	       (bt2::thread-alive-p thread)
+	       (not (eq (bt2:current-thread) thread)))
+	  (bt2::destroy-thread thread))
+      (setf (read-thread client) nil)))
   (emit :close client :code code :reason reason)
   t)
